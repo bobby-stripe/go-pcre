@@ -3,6 +3,7 @@
 package pcre
 
 import (
+	"fmt"
 	"testing"
 )
 
@@ -11,6 +12,9 @@ func TestCompile(t *testing.T) {
 		re, err := Compile(p, 0)
 		if err != nil {
 			t.Error(p, err)
+		}
+		if re.ptr == nil {
+			t.Error(p, fmt.Errorf("expeted non-nil .ptr"))
 		}
 		if g := re.Groups(); g != groups {
 			t.Error(p, g)
@@ -39,14 +43,14 @@ func TestCompileFail(t *testing.T) {
 			}
 		}
 	}
-	check("(", "missing )", 1)
+	check("(", "missing closing parenthesis", 1)
 	check("\\", "\\ at end of pattern", 1)
 	check("abc\\", "\\ at end of pattern", 4)
 	check("abc\000", "NUL byte in pattern", 3)
 	check("a\000bc", "NUL byte in pattern", 1)
 }
 
-func strings(b [][]byte) (r []string) {
+func getStrings(b [][]byte) (r []string) {
 	r = make([]string, len(b))
 	for i, v := range b {
 		r[i] = string(v)
@@ -66,8 +70,7 @@ func equal(l, r []string) bool {
 	return true
 }
 
-func checkmatch1(t *testing.T, dostring bool, m *Matcher,
-	pattern, subject string, args ...interface{}) {
+func checkmatch1(t *testing.T, dostring bool, m *Matcher, pattern, subject string, args ...interface{}) {
 	re := MustCompile(pattern, 0)
 	var prefix string
 	if dostring {

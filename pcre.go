@@ -53,156 +53,350 @@
 // http://www.pcre.org/pcre.txt
 package pcre
 
-// #cgo pkg-config: libpcre
-// #include <pcre.h>
-// #include <string.h>
-// #include "./pcre_fallback.h"
-import "C"
-
 import (
+	"bytes"
+	_ "embed"
+	"encoding/binary"
 	"fmt"
+	"reflect"
 	"strconv"
-	"unsafe"
+	"strings"
+	"sync"
+
+	"github.com/mathetake/gasm/wasi"
+	"github.com/mathetake/gasm/wasm"
 )
+
+//go:embed libpcre2.wasm
+var libpcre2WasmBytecode []byte
 
 // Flags for Compile and Match functions.
 const (
-	ANCHORED          = C.PCRE_ANCHORED
-	BSR_ANYCRLF       = C.PCRE_BSR_ANYCRLF
-	BSR_UNICODE       = C.PCRE_BSR_UNICODE
-	NEWLINE_ANY       = C.PCRE_NEWLINE_ANY
-	NEWLINE_ANYCRLF   = C.PCRE_NEWLINE_ANYCRLF
-	NEWLINE_CR        = C.PCRE_NEWLINE_CR
-	NEWLINE_CRLF      = C.PCRE_NEWLINE_CRLF
-	NEWLINE_LF        = C.PCRE_NEWLINE_LF
-	NO_START_OPTIMIZE = C.PCRE_NO_START_OPTIMIZE
-	NO_UTF8_CHECK     = C.PCRE_NO_UTF8_CHECK
+	ANCHORED          = 0x80000000
+	BSR_ANYCRLF       = 2
+	BSR_UNICODE       = 1
+	NEWLINE_ANY       = 4
+	NEWLINE_ANYCRLF   = 5
+	NEWLINE_CR        = 1
+	NEWLINE_CRLF      = 3
+	NEWLINE_LF        = 2
+	NO_START_OPTIMIZE = 0x00010000
+	NO_UTF8_CHECK     = 0x40000000
 )
 
 // Flags for Compile functions
 const (
-	CASELESS          = C.PCRE_CASELESS
-	DOLLAR_ENDONLY    = C.PCRE_DOLLAR_ENDONLY
-	DOTALL            = C.PCRE_DOTALL
-	DUPNAMES          = C.PCRE_DUPNAMES
-	EXTENDED          = C.PCRE_EXTENDED
-	EXTRA             = C.PCRE_EXTRA
-	FIRSTLINE         = C.PCRE_FIRSTLINE
-	JAVASCRIPT_COMPAT = C.PCRE_JAVASCRIPT_COMPAT
-	MULTILINE         = C.PCRE_MULTILINE
-	NEVER_UTF         = C.PCRE_NEVER_UTF
-	NO_AUTO_CAPTURE   = C.PCRE_NO_AUTO_CAPTURE
-	UNGREEDY          = C.PCRE_UNGREEDY
-	UTF8              = C.PCRE_UTF8
-	UCP               = C.PCRE_UCP
+	CASELESS        = 0x00000008
+	DOLLAR_ENDONLY  = 0x00000010
+	DOTALL          = 0x00000020
+	DUPNAMES        = 0x00000040
+	EXTENDED        = 0x00000080
+	FIRSTLINE       = 0x00000100
+	MULTILINE       = 0x00000400
+	NEVER_UTF       = 0x00001000
+	NO_AUTO_CAPTURE = 0x00002000
+	UNGREEDY        = 0x00040000
+	UCP             = 0x00020000
 )
 
 // Flags for Match functions
 const (
-	NOTBOL           = C.PCRE_NOTBOL
-	NOTEOL           = C.PCRE_NOTEOL
-	NOTEMPTY         = C.PCRE_NOTEMPTY
-	NOTEMPTY_ATSTART = C.PCRE_NOTEMPTY_ATSTART
-	PARTIAL_HARD     = C.PCRE_PARTIAL_HARD
-	PARTIAL_SOFT     = C.PCRE_PARTIAL_SOFT
+	NOTBOL           = 0x00000001
+	NOTEOL           = 0x00000002
+	NOTEMPTY         = 0x00000004
+	NOTEMPTY_ATSTART = 0x00000008
+	PARTIAL_HARD     = 0x00000020
+	PARTIAL_SOFT     = 0x00000010
 )
 
 // Flags for Study function
-const (
-	STUDY_JIT_COMPILE              = C.PCRE_STUDY_JIT_COMPILE
-	STUDY_JIT_PARTIAL_SOFT_COMPILE = C.PCRE_STUDY_JIT_PARTIAL_SOFT_COMPILE
-	STUDY_JIT_PARTIAL_HARD_COMPILE = C.PCRE_STUDY_JIT_PARTIAL_HARD_COMPILE
-)
+//const (
+//	STUDY_JIT_COMPILE              = C.PCRE_STUDY_JIT_COMPILE
+//	STUDY_JIT_PARTIAL_SOFT_COMPILE = C.PCRE_STUDY_JIT_PARTIAL_SOFT_COMPILE
+//	STUDY_JIT_PARTIAL_HARD_COMPILE = C.PCRE_STUDY_JIT_PARTIAL_HARD_COMPILE
+//)
 
 // Exec-time and get/set-time error codes
 const (
-	ERROR_NOMATCH        = C.PCRE_ERROR_NOMATCH
-	ERROR_NULL           = C.PCRE_ERROR_NULL
-	ERROR_BADOPTION      = C.PCRE_ERROR_BADOPTION
-	ERROR_BADMAGIC       = C.PCRE_ERROR_BADMAGIC
-	ERROR_UNKNOWN_OPCODE = C.PCRE_ERROR_UNKNOWN_OPCODE
-	ERROR_UNKNOWN_NODE   = C.PCRE_ERROR_UNKNOWN_NODE
-	ERROR_NOMEMORY       = C.PCRE_ERROR_NOMEMORY
-	ERROR_NOSUBSTRING    = C.PCRE_ERROR_NOSUBSTRING
-	ERROR_MATCHLIMIT     = C.PCRE_ERROR_MATCHLIMIT
-	ERROR_CALLOUT        = C.PCRE_ERROR_CALLOUT
-	ERROR_BADUTF8        = C.PCRE_ERROR_BADUTF8
-	ERROR_BADUTF8_OFFSET = C.PCRE_ERROR_BADUTF8_OFFSET
-	ERROR_PARTIAL        = C.PCRE_ERROR_PARTIAL
-	ERROR_BADPARTIAL     = C.PCRE_ERROR_BADPARTIAL
-	ERROR_RECURSIONLIMIT = C.PCRE_ERROR_RECURSIONLIMIT
-	ERROR_INTERNAL       = C.PCRE_ERROR_INTERNAL
-	ERROR_BADCOUNT       = C.PCRE_ERROR_BADCOUNT
-	ERROR_JIT_STACKLIMIT = C.PCRE_ERROR_JIT_STACKLIMIT
+	ERROR_NOMATCH        = -1
+	ERROR_NULL           = -51
+	ERROR_BADOPTION      = -34
+	ERROR_BADOFFSET      = -33
+	ERROR_BADMAGIC       = -31
+	ERROR_NOMEMORY       = -48
+	ERROR_NOSUBSTRING    = -49
+	ERROR_MATCHLIMIT     = -47
+	ERROR_CALLOUT        = -37
+	ERROR_BADUTF8_OFFSET = -36
+	ERROR_PARTIAL        = -2
+	ERROR_RECURSIONLIMIT = -53
+	ERROR_INTERNAL       = -44
 )
+
+type pcreModule struct {
+	vm *wasm.VirtualMachine
+	mu sync.Mutex
+}
+
+func (m *pcreModule) mem() []byte {
+	return m.vm.Store.Memories[0].Memory
+}
+
+// callocLocked calls malloc, then zeros the buffer
+func (m *pcreModule) callocLocked(len uint64) uint64 {
+	results, _, err := m.vm.ExecExportedFunction("main", "malloc", len)
+	if err != nil {
+		// this is a build-time error caught by tests
+		panic(fmt.Errorf("malloc Exec failed: %e", err))
+	}
+	ptr := results[0]
+
+	mem := m.mem()
+	for i := uint64(0); i < len; i++ {
+		mem[ptr+i] = 0
+	}
+
+	return ptr
+}
+
+func (m *pcreModule) freeLocked(ptr uint64) {
+	_, _, err := m.vm.ExecExportedFunction("main", "free", ptr)
+	if err != nil {
+		// this is a build-time error caught by tests
+		panic(fmt.Errorf("free Exec failed: %e", err))
+	}
+}
+
+func (m *pcreModule) getLastErrorLocked(pattern string) *CompileError {
+	errorBufPtr := m.callocLocked(128)
+	defer m.freeLocked(errorBufPtr)
+
+	results, _, err := m.vm.ExecExportedFunction("main", "lastErrorMessage", errorBufPtr, 127)
+	if err != nil {
+		panic(fmt.Errorf("VM error: %e", err))
+	}
+
+	mem := m.mem()
+	nullOff := uint64(bytes.IndexByte(mem[errorBufPtr:errorBufPtr+128], 0))
+
+	message := string(mem[errorBufPtr : errorBufPtr+nullOff])
+
+	results, _, err = m.vm.ExecExportedFunction("main", "lastErrorOffset")
+	if err != nil {
+		panic(fmt.Errorf("compile Exec failed: %e", err))
+	}
+
+	offset := results[0]
+
+	return &CompileError{
+		Pattern: pattern,
+		Message: message,
+		Offset:  int(offset),
+	}
+}
+
+func (m *pcreModule) allocRegexpLocked(regexp Regexp) uint64 {
+	reLen := uint64(len(regexp.ptr))
+	ptr := m.callocLocked(reLen)
+	mem := m.mem()
+	copy(mem[ptr:ptr+reLen], regexp.ptr)
+
+	return ptr
+}
+
+func (m *pcreModule) copyOutRegexpLocked(ptr uint64) []byte {
+	reLen := m.patternSizeLocked(ptr)
+	pattern := make([]byte, reLen)
+	mem := m.mem()
+	copy(pattern, mem[ptr:ptr+uint64(reLen)])
+	return pattern
+}
+
+func (m *pcreModule) Compile(pattern string, flags int) (Regexp, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if nullOffset := strings.IndexByte(pattern, 0); nullOffset >= 0 {
+		return Regexp{}, &CompileError{
+			Pattern: pattern,
+			Message: "NUL byte in pattern",
+			Offset:  nullOffset,
+		}
+	}
+
+	patternLen := uint64(len(pattern))
+	patternPtr := m.callocLocked(patternLen + 1) // for trailing null, Just In Case
+	defer m.freeLocked(patternPtr)
+
+	mem := m.mem()
+	copy(mem[patternPtr:patternPtr+patternLen], pattern)
+
+	results, _, err := m.vm.ExecExportedFunction("main", "compile", patternPtr, patternLen, uint64(flags))
+	if err != nil {
+		panic(fmt.Errorf("compile Exec failed: %e", err))
+	}
+	ptr := results[0]
+	if ptr == 0 {
+		return Regexp{}, m.getLastErrorLocked(pattern)
+	}
+	defer m.freeLocked(ptr)
+
+	reCode := m.copyOutRegexpLocked(ptr)
+
+	return Regexp{ptr: reCode}, nil
+}
+
+func (m *pcreModule) captureCount(re Regexp) int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	rePtr := m.allocRegexpLocked(re)
+	defer m.freeLocked(rePtr)
+
+	results, _, err := m.vm.ExecExportedFunction("main", "groupCount", rePtr)
+	if err != nil {
+		panic(fmt.Errorf("groupSize Exec failed: %e", err))
+	}
+	return int(results[0])
+}
+
+func (m *pcreModule) patternSizeLocked(rePtr uint64) int {
+	results, _, err := m.vm.ExecExportedFunction("main", "patternSize", rePtr)
+	if err != nil {
+		panic(fmt.Errorf("patternSize Exec failed: %e", err))
+	}
+	return int(results[0])
+}
+
+func (m *pcreModule) substringNumberFromName(re Regexp, name string) int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	rePtr := m.allocRegexpLocked(re)
+	defer m.freeLocked(rePtr)
+
+	nameLen := len(name)
+	namePtr := m.callocLocked(uint64(nameLen) + 1)
+	defer m.freeLocked(namePtr)
+
+	mem := m.mem()
+	copy(mem[namePtr:namePtr+uint64(nameLen)], name)
+
+	results, _, err := m.vm.ExecExportedFunction("main", "substringNumberFromName", rePtr, namePtr)
+	if err != nil {
+		panic(fmt.Errorf("substringNumberFromName Exec failed: %e", err))
+	}
+	return int(results[0])
+}
+
+func (m *pcreModule) match(match *Matcher, subject []byte, length int, flags int) int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	rePtr := m.allocRegexpLocked(match.re)
+	defer m.freeLocked(rePtr)
+
+	subjectPtr := m.callocLocked(uint64(length))
+	defer m.freeLocked(subjectPtr)
+
+	mem := m.mem()
+	copy(mem[subjectPtr:subjectPtr+uint64(length)], subject)
+
+	results, _, err := m.vm.ExecExportedFunction("main", "createMatchData", rePtr)
+	if err != nil {
+		panic(fmt.Errorf("createMatchData Exec failed: %e", err))
+	}
+	matchData := results[0]
+	defer func(matchData uint64) {
+		_, _, err := m.vm.ExecExportedFunction("main", "destroyMatchData", matchData)
+		if err != nil {
+			panic(fmt.Errorf("createMatchData Exec failed: %e", err))
+		}
+	}(matchData)
+
+	results, _, err = m.vm.ExecExportedFunction("main", "match", rePtr, subjectPtr, uint64(length), 0, uint64(flags), matchData)
+	if err != nil {
+		panic(fmt.Errorf("compile Exec failed: %e", err))
+	}
+
+	matchCount := int(results[0])
+
+	results, _, err = m.vm.ExecExportedFunction("main", "getOVectorSize", matchData)
+	if err != nil {
+		panic(fmt.Errorf("compile Exec failed: %e", err))
+	}
+	ovecLen := int(results[0])
+	if ovecLen*3 != len(match.ovector) {
+		panic(fmt.Errorf("expected ovector lengths to match, but %d != %d", ovecLen*3, len(match.ovector)))
+	}
+
+	results, _, err = m.vm.ExecExportedFunction("main", "getOVectorPtr", matchData)
+	if err != nil {
+		panic(fmt.Errorf("compile Exec failed: %e", err))
+	}
+	ovecPtr := int(results[0])
+
+	for i := 0; i < ovecLen*2; i++ {
+		entryPtr := ovecPtr + i*4
+		entry := mem[entryPtr : entryPtr+4]
+		match.ovector[i] = int(binary.LittleEndian.Uint32(entry))
+	}
+
+	return matchCount
+}
+
+func newPcreModule() *pcreModule {
+	mod, err := wasm.DecodeModule(libpcre2WasmBytecode)
+	if err != nil {
+		panic(fmt.Errorf("decode module failed: %e", err))
+	}
+
+	vm, err := wasm.NewVM()
+	if err != nil {
+		panic(fmt.Errorf("NewVM() failed: %e", err))
+	}
+
+	err = wasi.NewEnvironment().RegisterToVirtualMachine(vm)
+	if err != nil {
+		panic(fmt.Errorf("RegisterToVirtualMachine() failed: %e", err))
+	}
+
+	vm.AddHostFunction("env", "emscripten_notify_memory_growth", reflect.ValueOf(notifyStub))
+
+	err = vm.InstantiateModule(mod, "main")
+	if err != nil {
+		panic(fmt.Errorf("InstantiateModule() failed: %e", err))
+	}
+
+	_, _, err = vm.ExecExportedFunction("main", "_initialize")
+	if err != nil {
+		panic(fmt.Errorf("exec initialize() failed: %e", err))
+	}
+
+	return &pcreModule{
+		vm: vm,
+	}
+}
+
+var mod *pcreModule
+
+func notifyStub(_vm *wasm.VirtualMachine, _len int32) {
+}
+
+func init() {
+	mod = newPcreModule()
+}
 
 // Regexp holds a reference to a compiled regular expression.
 // Use Compile or MustCompile to create such objects.
 type Regexp struct {
-	ptr   []byte
-	extra []byte
-}
-
-// Number of bytes in the compiled pattern
-func pcreSize(ptr *C.pcre) (size C.size_t) {
-	C.pcre_fullinfo(ptr, nil, C.PCRE_INFO_SIZE, unsafe.Pointer(&size))
-	return
-}
-
-// Number of capture groups
-func pcreGroups(ptr *C.pcre) (count C.int) {
-	C.pcre_fullinfo(ptr, nil,
-		C.PCRE_INFO_CAPTURECOUNT, unsafe.Pointer(&count))
-	return
-}
-
-// Move pattern to the Go heap so that we do not have to use a
-// finalizer.  PCRE patterns are fully relocatable. (We do not use
-// custom character tables.)
-func toHeap(ptr *C.pcre) (re Regexp) {
-	defer C.free(unsafe.Pointer(ptr))
-	size := pcreSize(ptr)
-	re.ptr = make([]byte, size)
-	C.memcpy(unsafe.Pointer(&re.ptr[0]), unsafe.Pointer(ptr), size)
-	return
+	ptr []byte
 }
 
 // Compile the pattern and return a compiled regexp.
 // If compilation fails, the second return value holds a *CompileError.
 func Compile(pattern string, flags int) (Regexp, error) {
-	pattern1 := C.CString(pattern)
-	defer C.free(unsafe.Pointer(pattern1))
-	if clen := int(C.strlen(pattern1)); clen != len(pattern) {
-		return Regexp{}, &CompileError{
-			Pattern: pattern,
-			Message: "NUL byte in pattern",
-			Offset:  clen,
-		}
-	}
-	var errptr *C.char
-	var erroffset C.int
-	ptr := C.pcre_compile(pattern1, C.int(flags), &errptr, &erroffset, nil)
-	if ptr == nil {
-		return Regexp{}, &CompileError{
-			Pattern: pattern,
-			Message: C.GoString(errptr),
-			Offset:  int(erroffset),
-		}
-	}
-	heap := toHeap(ptr)
-	return heap, nil
-}
-
-// CompileJIT is a combination of Compile and Study. It first compiles
-// the pattern and if this succeeds calls Study on the compiled pattern.
-// comFlags are Compile flags, jitFlags are study flags.
-// If compilation fails, the second return value holds a *CompileError.
-func CompileJIT(pattern string, comFlags, jitFlags int) (Regexp, error) {
-	re, err := Compile(pattern, comFlags)
-	if err == nil {
-		err = (&re).Study(jitFlags)
-	}
-	return re, err
+	return mod.Compile(pattern, flags)
 }
 
 // MustCompile compiles the pattern.  If compilation fails, panic.
@@ -214,67 +408,12 @@ func MustCompile(pattern string, flags int) (re Regexp) {
 	return
 }
 
-// MustCompileJIT compiles and studies the pattern.  On failure it panics.
-func MustCompileJIT(pattern string, comFlags, jitFlags int) (re Regexp) {
-	re, err := CompileJIT(pattern, comFlags, jitFlags)
-	if err != nil {
-		panic(err)
-	}
+// Matcher creates a new matcher object, with the byte slice as subject.
+// It also starts a first match on subject. Test for success with Matches().
+func (re Regexp) Matcher(subject []byte, flags int) (m *Matcher) {
+	m = re.NewMatcher()
+	m.Match(subject, flags)
 	return
-}
-
-// Study adds Just-In-Time compilation to a Regexp. This may give a huge
-// speed boost when matching. If an error occurs, return value is non-nil.
-// Flags optionally specifies JIT compilation options for partial matches.
-func (re *Regexp) Study(flags int) error {
-	if re.extra != nil {
-		return fmt.Errorf("Study: Regexp has already been optimized")
-	}
-	if flags == 0 {
-		flags = STUDY_JIT_COMPILE
-	}
-
-	ptr := (*C.pcre)(unsafe.Pointer(&re.ptr[0]))
-	var err *C.char
-	extra := C.pcre_study(ptr, C.int(flags), &err)
-	if err != nil {
-		return fmt.Errorf("%s", C.GoString(err))
-	}
-	if extra == nil {
-		// Studying the pattern may not produce useful information.
-		return nil
-	}
-	defer C.free(unsafe.Pointer(extra))
-
-	var size C.size_t
-	rc := C.pcre_fullinfo(ptr, extra, C.PCRE_INFO_JITSIZE, unsafe.Pointer(&size))
-	if rc != 0 || size == 0 {
-		return fmt.Errorf("Study failed to obtain JIT size (%d)", int(rc))
-	}
-	re.extra = make([]byte, size)
-	C.memcpy(unsafe.Pointer(&re.extra[0]), unsafe.Pointer(extra), size)
-	return nil
-}
-
-// Groups returns the number of capture groups in the compiled pattern.
-func (re Regexp) Groups() int {
-	if re.ptr == nil {
-		panic("Regexp.Groups: uninitialized")
-	}
-	return int(pcreGroups((*C.pcre)(unsafe.Pointer(&re.ptr[0]))))
-}
-
-// Matcher objects provide a place for storing match results.
-// They can be created by the Matcher and MatcherString functions,
-// or they can be initialized with Reset or ResetString.
-type Matcher struct {
-	re       Regexp
-	groups   int
-	ovector  []C.int // scratch space for capture offsets
-	matches  bool    // last match was successful
-	partial  bool    // was the last match a partial match?
-	subjects string  // one of these fields is set to record the subject,
-	subjectb []byte  // so that Group/GroupString can return slices
 }
 
 // NewMatcher creates a new matcher object for the given Regexp.
@@ -284,12 +423,13 @@ func (re Regexp) NewMatcher() (m *Matcher) {
 	return
 }
 
-// Matcher creates a new matcher object, with the byte slice as subject.
-// It also starts a first match on subject. Test for success with Matches().
-func (re Regexp) Matcher(subject []byte, flags int) (m *Matcher) {
-	m = re.NewMatcher()
-	m.Match(subject, flags)
-	return
+// Groups returns the number of capture groups in the compiled pattern.
+func (re Regexp) Groups() int {
+	if re.ptr == nil {
+		panic("Regexp.Groups: uninitialized")
+	}
+
+	return mod.captureCount(re)
 }
 
 // MatcherString creates a new matcher, with the specified subject string.
@@ -300,18 +440,18 @@ func (re Regexp) MatcherString(subject string, flags int) (m *Matcher) {
 	return
 }
 
-// Reset switches the matcher object to the specified regexp and subject.
-// It also starts a first match on subject.
-func (m *Matcher) Reset(re Regexp, subject []byte, flags int) bool {
-	m.Init(&re)
-	return m.Match(subject, flags)
-}
-
-// ResetString switches the matcher object to the given regexp and subject.
-// It also starts a first match on subject.
-func (m *Matcher) ResetString(re Regexp, subject string, flags int) bool {
-	m.Init(&re)
-	return m.MatchString(subject, flags)
+// Matcher objects provide a place for storing match results.
+// They can be created by the Matcher and MatcherString functions,
+// or they can be initialized with Reset or ResetString.
+type Matcher struct {
+	re        Regexp
+	groups    int
+	matchData uint64
+	ovector   []int
+	matches   bool   // last match was successful
+	partial   bool   // was the last match a partial match?
+	subjects  string // one of these fields is set to record the subject,
+	subjectb  []byte // so that Group/GroupString can return slices
 }
 
 // Init binds an existing Matcher object to the given Regexp.
@@ -329,11 +469,9 @@ func (m *Matcher) Init(re *Regexp) {
 	m.re = *re
 	m.groups = re.Groups()
 	if ovectorlen := 3 * (1 + m.groups); len(m.ovector) < ovectorlen {
-		m.ovector = make([]C.int, ovectorlen)
+		m.ovector = make([]int, ovectorlen)
 	}
 }
-
-var nullbyte = []byte{0}
 
 // Match tries to match the specified byte slice to
 // the current pattern by calling Exec and collects the result.
@@ -347,6 +485,23 @@ func (m *Matcher) Match(subject []byte, flags int) bool {
 	m.partial = (rc == ERROR_PARTIAL)
 	return m.matches
 }
+
+// Reset switches the matcher object to the specified regexp and subject.
+// It also starts a first match on subject.
+func (m *Matcher) Reset(re Regexp, subject []byte, flags int) bool {
+	*m = Matcher{}
+	m.Init(&re)
+	return m.Match(subject, flags)
+}
+
+// ResetString switches the matcher object to the given regexp and subject.
+// It also starts a first match on subject.
+func (m *Matcher) ResetString(re Regexp, subject string, flags int) bool {
+	m.Init(&re)
+	return m.MatchString(subject, flags)
+}
+
+var nullbyte = []byte{0}
 
 // MatchString tries to match the specified subject string to
 // the current pattern by calling ExecString and collects the result.
@@ -373,8 +528,7 @@ func (m *Matcher) Exec(subject []byte, flags int) int {
 	if length == 0 {
 		subject = nullbyte // make first character adressable
 	}
-	subjectptr := (*C.char)(unsafe.Pointer(&subject[0]))
-	return m.exec(subjectptr, length, flags)
+	return m.exec(subject, length, flags)
 }
 
 // ExecString tries to match the specified subject string to
@@ -389,30 +543,22 @@ func (m *Matcher) ExecString(subject string, flags int) int {
 	if length == 0 {
 		subject = "\000" // make first character addressable
 	}
-	// The following is a non-portable kludge to avoid a copy
-	subjectptr := *(**C.char)(unsafe.Pointer(&subject))
-	return m.exec(subjectptr, length, flags)
+	subjectSlice := []byte(subject)
+	return m.exec(subjectSlice, length, flags)
 }
 
-func (m *Matcher) exec(subjectptr *C.char, length, flags int) int {
-	var extra *C.pcre_extra
-	if m.re.extra != nil {
-		extra = (*C.pcre_extra)(unsafe.Pointer(&m.re.extra[0]))
-	}
-	rc := C.pcre_exec((*C.pcre)(unsafe.Pointer(&m.re.ptr[0])), extra,
-		subjectptr, C.int(length),
-		0, C.int(flags), &m.ovector[0], C.int(len(m.ovector)))
-	return int(rc)
+func (m *Matcher) exec(subject []byte, length, flags int) int {
+	return mod.match(m, subject, length, flags)
 }
 
 // matched checks the return code of a pattern match for success.
 func matched(rc int) bool {
 	switch {
-	case rc >= 0 || rc == C.PCRE_ERROR_PARTIAL:
+	case rc >= 0 || rc == ERROR_PARTIAL:
 		return true
-	case rc == C.PCRE_ERROR_NOMATCH:
+	case rc == ERROR_NOMATCH:
 		return false
-	case rc == C.PCRE_ERROR_BADOPTION:
+	case rc == ERROR_BADOPTION:
 		panic("PCRE.Match: invalid option flag")
 	}
 	panic("unexpected return code from pcre_exec: " + strconv.Itoa(rc))
@@ -440,7 +586,7 @@ func (m *Matcher) Groups() int {
 // Match, or MatchString).  Group numbers start at 1.  A capture group
 // can be present and match the empty string.
 func (m *Matcher) Present(group int) bool {
-	return m.ovector[2*group] >= 0
+	return m.ovector[2*group] != 0xffffffff
 }
 
 // Group returns the numbered capture group of the last match (performed by
@@ -542,14 +688,8 @@ func (m *Matcher) name2index(name string) (int, error) {
 	if m.re.ptr == nil {
 		return 0, fmt.Errorf("Matcher.Named: uninitialized")
 	}
-	name1 := C.CString(name)
-	defer C.free(unsafe.Pointer(name1))
-	group := int(C.pcre_get_stringnumber(
-		(*C.pcre)(unsafe.Pointer(&m.re.ptr[0])), name1))
-	if group < 0 {
-		return group, fmt.Errorf("Matcher.Named: unknown name: " + name)
-	}
-	return group, nil
+
+	return mod.substringNumberFromName(m.re, name), nil
 }
 
 // Named returns the value of the named capture group.

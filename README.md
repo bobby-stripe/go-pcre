@@ -1,25 +1,27 @@
 # go-pcre
 
-[![GoDoc](https://godoc.org/github.com/gijsbers/go-pcre?status.svg)](https://godoc.org/github.com/gijsbers/go-pcre)
+[![GoDoc](https://godoc.org/github.com/bobby-stripe/go-pcre?status.svg)](https://godoc.org/github.com/bobby-stripe/go-pcre)
 
-This is a Go language package providing support for
-Perl Compatible Regular Expressions (PCRE).
+This is a **pure** Go language package providing support for Perl Compatible Regular Expressions (PCRE), enabling the use of this package with `CGO_ENABLED=0`.
 
 ## Installation
 
 Install the package for Debian as follows:
 
-    sudo apt-get install libpcre++-dev
-    go get github.com/gijsbers/go-pcre
+    go get github.com/bobby-stripe/go-pcre
 
 ## Usage
 
 Go programs that depend on this package should import
 this package as follows to allow automatic downloading:
 
-    import "github.com/gijsbers/go-pcre"
+    import "github.com/bobby-stripe/go-pcre"
 
 ## History
+
+This is a clone of gijsbers's [go-pcre](https://github.com/gijsbers/go-pcre), but instead of using pcre via CGO, we compile pcre2 to WebAssembly and interpret it.
+I've tried to keep the API the same, except by necessity the JIT-related functions were removed.
+[bobby-stripe/pcre2-wasm](https://github.com/bobby-stripe/pcre2-wasm) contains the build script to compile pcre2 into wasm bytecode using docker.
 
 This is a clone of
 [golang-pkg-pcre](http://git.enyo.de/fw/debian/golang-pkg-pcre.git)
