@@ -67,71 +67,10 @@ import (
 	"github.com/mathetake/gasm/wasm"
 )
 
+//go:generate bash define-constants.bash
+
 //go:embed libpcre2.wasm
 var libpcre2WasmBytecode []byte
-
-// Flags for Compile and Match functions.
-const (
-	ANCHORED          = 0x80000000
-	BSR_ANYCRLF       = 2
-	BSR_UNICODE       = 1
-	NEWLINE_ANY       = 4
-	NEWLINE_ANYCRLF   = 5
-	NEWLINE_CR        = 1
-	NEWLINE_CRLF      = 3
-	NEWLINE_LF        = 2
-	NO_START_OPTIMIZE = 0x00010000
-	NO_UTF8_CHECK     = 0x40000000
-)
-
-// Flags for Compile functions
-const (
-	CASELESS        = 0x00000008
-	DOLLAR_ENDONLY  = 0x00000010
-	DOTALL          = 0x00000020
-	DUPNAMES        = 0x00000040
-	EXTENDED        = 0x00000080
-	FIRSTLINE       = 0x00000100
-	MULTILINE       = 0x00000400
-	NEVER_UTF       = 0x00001000
-	NO_AUTO_CAPTURE = 0x00002000
-	UNGREEDY        = 0x00040000
-	UCP             = 0x00020000
-)
-
-// Flags for Match functions
-const (
-	NOTBOL           = 0x00000001
-	NOTEOL           = 0x00000002
-	NOTEMPTY         = 0x00000004
-	NOTEMPTY_ATSTART = 0x00000008
-	PARTIAL_HARD     = 0x00000020
-	PARTIAL_SOFT     = 0x00000010
-)
-
-// Flags for Study function
-//const (
-//	STUDY_JIT_COMPILE              = C.PCRE_STUDY_JIT_COMPILE
-//	STUDY_JIT_PARTIAL_SOFT_COMPILE = C.PCRE_STUDY_JIT_PARTIAL_SOFT_COMPILE
-//	STUDY_JIT_PARTIAL_HARD_COMPILE = C.PCRE_STUDY_JIT_PARTIAL_HARD_COMPILE
-//)
-
-// Exec-time and get/set-time error codes
-const (
-	ERROR_NOMATCH        = -1
-	ERROR_NULL           = -51
-	ERROR_BADOPTION      = -34
-	ERROR_BADOFFSET      = -33
-	ERROR_BADMAGIC       = -31
-	ERROR_NOMEMORY       = -48
-	ERROR_NOSUBSTRING    = -49
-	ERROR_MATCHLIMIT     = -47
-	ERROR_CALLOUT        = -37
-	ERROR_BADUTF8_OFFSET = -36
-	ERROR_PARTIAL        = -2
-	ERROR_RECURSIONLIMIT = -53
-	ERROR_INTERNAL       = -44
-)
 
 type pcreModule struct {
 	vm *wasm.VirtualMachine
