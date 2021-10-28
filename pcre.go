@@ -74,8 +74,10 @@ import (
 var libpcre2WasmBytecode []byte
 
 type pcreModule struct {
-	vm *wasm.Store
-	mu sync.Mutex
+	vm             *wasm.Store
+	mu             sync.Mutex
+	errorCodePtr   uint64
+	errorOffsetPtr uint64
 }
 
 func (m *pcreModule) mem() []byte {
@@ -107,26 +109,40 @@ func (m *pcreModule) freeLocked(ptr uint64) {
 	}
 }
 
+func (m *pcreModule) clearLastErrorLocked() {
+	mem := m.mem()
+
+	binary.LittleEndian.PutUint32(mem[m.errorCodePtr:m.errorCodePtr+4], 0)
+	binary.LittleEndian.PutUint32(mem[m.errorOffsetPtr:m.errorOffsetPtr+4], 0)
+}
+
+func (m *pcreModule) readUint32(ptr uint64) uint32 {
+	mem := m.mem()
+	return binary.LittleEndian.Uint32(mem[ptr : ptr+4])
+}
+
 func (m *pcreModule) getLastErrorLocked(pattern string) *CompileError {
-	errorBufPtr := m.callocLocked(128)
+	errorCode := m.readUint32(m.errorCodePtr)
+	if errorCode == 0 {
+		// no error? super
+		return nil
+	}
+
+	errorBufLen := uint64(128)
+	errorBufPtr := m.callocLocked(errorBufLen)
 	defer m.freeLocked(errorBufPtr)
 
-	results, _, err := m.vm.CallFunction("main", "lastErrorMessage", errorBufPtr, 127)
+	_, _, err := m.vm.CallFunction("main", "pcre2_get_error_message_8", uint64(errorCode), errorBufPtr, 127)
 	if err != nil {
-		panic(fmt.Errorf("VM error: %e", err))
+		panic(fmt.Errorf("call(_pcre2_get_error_message_8): %e", err))
 	}
 
 	mem := m.mem()
-	nullOff := uint64(bytes.IndexByte(mem[errorBufPtr:errorBufPtr+128], 0))
+	nullOff := uint64(bytes.IndexByte(mem[errorBufPtr:errorBufPtr+errorBufLen], 0))
 
 	message := string(mem[errorBufPtr : errorBufPtr+nullOff])
 
-	results, _, err = m.vm.CallFunction("main", "lastErrorOffset")
-	if err != nil {
-		panic(fmt.Errorf("compile Exec failed: %e", err))
-	}
-
-	offset := results[0]
+	offset := m.readUint32(m.errorOffsetPtr)
 
 	return &CompileError{
 		Pattern: pattern,
@@ -144,11 +160,11 @@ func (m *pcreModule) allocRegexpLocked(regexp Regexp) uint64 {
 	return ptr
 }
 
-func (m *pcreModule) copyOutRegexpLocked(ptr uint64) []byte {
-	reLen := m.patternSizeLocked(ptr)
+func (m *pcreModule) copyOutRegexpLocked(rePtr uint64) []byte {
+	reLen := m.patternInfoLocked(rePtr, INFO_SIZE)
 	pattern := make([]byte, reLen)
 	mem := m.mem()
-	copy(pattern, mem[ptr:ptr+uint64(reLen)])
+	copy(pattern, mem[rePtr:rePtr+uint64(reLen)])
 	return pattern
 }
 
@@ -171,9 +187,9 @@ func (m *pcreModule) Compile(pattern string, flags int) (Regexp, error) {
 	mem := m.mem()
 	copy(mem[patternPtr:patternPtr+patternLen], pattern)
 
-	results, _, err := m.vm.CallFunction("main", "compile", patternPtr, patternLen, uint64(flags))
+	results, _, err := m.vm.CallFunction("main", "pcre2_compile_8", patternPtr, patternLen, uint64(flags), m.errorCodePtr, m.errorOffsetPtr, 0)
 	if err != nil {
-		panic(fmt.Errorf("compile Exec failed: %e", err))
+		panic(fmt.Errorf("call(_pcre2_compile_8): %e", err))
 	}
 	ptr := results[0]
 	if ptr == 0 {
@@ -186,6 +202,17 @@ func (m *pcreModule) Compile(pattern string, flags int) (Regexp, error) {
 	return Regexp{ptr: reCode}, nil
 }
 
+func (m *pcreModule) patternInfoLocked(rePtr uint64, info int) int {
+	resultPtr := m.callocLocked(4)
+	defer m.freeLocked(resultPtr)
+
+	_, _, err := m.vm.CallFunction("main", "pcre2_pattern_info_8", rePtr, uint64(info), resultPtr)
+	if err != nil {
+		panic(fmt.Errorf("call(pcre2_pattern_info_8): %e", err))
+	}
+	return int(m.readUint32(resultPtr))
+}
+
 func (m *pcreModule) captureCount(re Regexp) int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -193,19 +220,7 @@ func (m *pcreModule) captureCount(re Regexp) int {
 	rePtr := m.allocRegexpLocked(re)
 	defer m.freeLocked(rePtr)
 
-	results, _, err := m.vm.CallFunction("main", "groupCount", rePtr)
-	if err != nil {
-		panic(fmt.Errorf("groupSize Exec failed: %e", err))
-	}
-	return int(results[0])
-}
-
-func (m *pcreModule) patternSizeLocked(rePtr uint64) int {
-	results, _, err := m.vm.CallFunction("main", "patternSize", rePtr)
-	if err != nil {
-		panic(fmt.Errorf("patternSize Exec failed: %e", err))
-	}
-	return int(results[0])
+	return m.patternInfoLocked(rePtr, INFO_CAPTURECOUNT)
 }
 
 func (m *pcreModule) substringNumberFromName(re Regexp, name string) int {
@@ -222,9 +237,9 @@ func (m *pcreModule) substringNumberFromName(re Regexp, name string) int {
 	mem := m.mem()
 	copy(mem[namePtr:namePtr+uint64(nameLen)], name)
 
-	results, _, err := m.vm.CallFunction("main", "substringNumberFromName", rePtr, namePtr)
+	results, _, err := m.vm.CallFunction("main", "pcre2_substring_number_from_name_8", rePtr, namePtr)
 	if err != nil {
-		panic(fmt.Errorf("substringNumberFromName Exec failed: %e", err))
+		panic(fmt.Errorf("call(pcre2_substring_number_from_name_8): %e", err))
 	}
 	return int(results[0])
 }
@@ -242,37 +257,37 @@ func (m *pcreModule) match(match *Matcher, subject []byte, length int, flags int
 	mem := m.mem()
 	copy(mem[subjectPtr:subjectPtr+uint64(length)], subject)
 
-	results, _, err := m.vm.CallFunction("main", "createMatchData", rePtr)
+	results, _, err := m.vm.CallFunction("main", "pcre2_match_data_create_from_pattern_8", rePtr, 0)
 	if err != nil {
-		panic(fmt.Errorf("createMatchData Exec failed: %e", err))
+		panic(fmt.Errorf("call(pcre2_match_data_create_from_pattern_8): %e", err))
 	}
 	matchData := results[0]
 	defer func(matchData uint64) {
-		_, _, err := m.vm.CallFunction("main", "destroyMatchData", matchData)
+		_, _, err := m.vm.CallFunction("main", "pcre2_match_data_free_8", matchData)
 		if err != nil {
-			panic(fmt.Errorf("createMatchData Exec failed: %e", err))
+			panic(fmt.Errorf("call(pcre2_match_data_free_8): %e", err))
 		}
 	}(matchData)
 
-	results, _, err = m.vm.CallFunction("main", "match", rePtr, subjectPtr, uint64(length), 0, uint64(flags), matchData)
+	results, _, err = m.vm.CallFunction("main", "pcre2_match_8", rePtr, subjectPtr, uint64(length), 0, uint64(flags), matchData, 0)
 	if err != nil {
-		panic(fmt.Errorf("compile Exec failed: %e", err))
+		panic(fmt.Errorf("call(pcre2_match_8): %e", err))
 	}
 
 	matchCount := int(results[0])
 
-	results, _, err = m.vm.CallFunction("main", "getOVectorSize", matchData)
+	results, _, err = m.vm.CallFunction("main", "pcre2_get_ovector_count_8", matchData)
 	if err != nil {
-		panic(fmt.Errorf("compile Exec failed: %e", err))
+		panic(fmt.Errorf("call(pcre2_get_ovector_count_8): %e", err))
 	}
 	ovecLen := int(results[0])
 	if ovecLen*3 != len(match.ovector) {
 		panic(fmt.Errorf("expected ovector lengths to match, but %d != %d", ovecLen*3, len(match.ovector)))
 	}
 
-	results, _, err = m.vm.CallFunction("main", "getOVectorPtr", matchData)
+	results, _, err = m.vm.CallFunction("main", "pcre2_get_ovector_pointer_8", matchData)
 	if err != nil {
-		panic(fmt.Errorf("compile Exec failed: %e", err))
+		panic(fmt.Errorf("call(pcre2_get_ovector_pointer_8): %e", err))
 	}
 	ovecPtr := int(results[0])
 
@@ -298,7 +313,7 @@ func newPcreModule() *pcreModule {
 		panic(fmt.Errorf("Register() failed: %e", err))
 	}
 
-	vm.AddHostFunction("env", "emscripten_notify_memory_growth", reflect.ValueOf(notifyStub))
+	_ = vm.AddHostFunction("env", "emscripten_notify_memory_growth", reflect.ValueOf(notifyStub))
 
 	err = vm.Instantiate(mod, "main")
 	if err != nil {
@@ -310,9 +325,16 @@ func newPcreModule() *pcreModule {
 		panic(fmt.Errorf("exec initialize() failed: %e", err))
 	}
 
-	return &pcreModule{
+	m := &pcreModule{
 		vm: vm,
 	}
+
+	// alloc space for error information once -- we only call into libpcre2
+	// when holding a mutex, so this "global" state is fine.
+	m.errorCodePtr = m.callocLocked(4)
+	m.errorOffsetPtr = m.callocLocked(4)
+
+	return m
 }
 
 var mod *pcreModule
