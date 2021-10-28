@@ -63,8 +63,9 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/mathetake/gasm/wasi"
-	"github.com/mathetake/gasm/wasm"
+	"github.com/bobby-stripe/gasm/wasi"
+	"github.com/bobby-stripe/gasm/wasm"
+	"github.com/bobby-stripe/gasm/wasm/naivevm"
 )
 
 //go:generate bash define-constants.bash
@@ -73,17 +74,17 @@ import (
 var libpcre2WasmBytecode []byte
 
 type pcreModule struct {
-	vm *wasm.VirtualMachine
+	vm *wasm.Store
 	mu sync.Mutex
 }
 
 func (m *pcreModule) mem() []byte {
-	return m.vm.Store.Memories[0].Memory
+	return m.vm.Memories[0].Memory
 }
 
 // callocLocked calls malloc, then zeros the buffer
 func (m *pcreModule) callocLocked(len uint64) uint64 {
-	results, _, err := m.vm.ExecExportedFunction("main", "malloc", len)
+	results, _, err := m.vm.CallFunction("main", "malloc", len)
 	if err != nil {
 		// this is a build-time error caught by tests
 		panic(fmt.Errorf("malloc Exec failed: %e", err))
@@ -99,7 +100,7 @@ func (m *pcreModule) callocLocked(len uint64) uint64 {
 }
 
 func (m *pcreModule) freeLocked(ptr uint64) {
-	_, _, err := m.vm.ExecExportedFunction("main", "free", ptr)
+	_, _, err := m.vm.CallFunction("main", "free", ptr)
 	if err != nil {
 		// this is a build-time error caught by tests
 		panic(fmt.Errorf("free Exec failed: %e", err))
@@ -110,7 +111,7 @@ func (m *pcreModule) getLastErrorLocked(pattern string) *CompileError {
 	errorBufPtr := m.callocLocked(128)
 	defer m.freeLocked(errorBufPtr)
 
-	results, _, err := m.vm.ExecExportedFunction("main", "lastErrorMessage", errorBufPtr, 127)
+	results, _, err := m.vm.CallFunction("main", "lastErrorMessage", errorBufPtr, 127)
 	if err != nil {
 		panic(fmt.Errorf("VM error: %e", err))
 	}
@@ -120,7 +121,7 @@ func (m *pcreModule) getLastErrorLocked(pattern string) *CompileError {
 
 	message := string(mem[errorBufPtr : errorBufPtr+nullOff])
 
-	results, _, err = m.vm.ExecExportedFunction("main", "lastErrorOffset")
+	results, _, err = m.vm.CallFunction("main", "lastErrorOffset")
 	if err != nil {
 		panic(fmt.Errorf("compile Exec failed: %e", err))
 	}
@@ -170,7 +171,7 @@ func (m *pcreModule) Compile(pattern string, flags int) (Regexp, error) {
 	mem := m.mem()
 	copy(mem[patternPtr:patternPtr+patternLen], pattern)
 
-	results, _, err := m.vm.ExecExportedFunction("main", "compile", patternPtr, patternLen, uint64(flags))
+	results, _, err := m.vm.CallFunction("main", "compile", patternPtr, patternLen, uint64(flags))
 	if err != nil {
 		panic(fmt.Errorf("compile Exec failed: %e", err))
 	}
@@ -192,7 +193,7 @@ func (m *pcreModule) captureCount(re Regexp) int {
 	rePtr := m.allocRegexpLocked(re)
 	defer m.freeLocked(rePtr)
 
-	results, _, err := m.vm.ExecExportedFunction("main", "groupCount", rePtr)
+	results, _, err := m.vm.CallFunction("main", "groupCount", rePtr)
 	if err != nil {
 		panic(fmt.Errorf("groupSize Exec failed: %e", err))
 	}
@@ -200,7 +201,7 @@ func (m *pcreModule) captureCount(re Regexp) int {
 }
 
 func (m *pcreModule) patternSizeLocked(rePtr uint64) int {
-	results, _, err := m.vm.ExecExportedFunction("main", "patternSize", rePtr)
+	results, _, err := m.vm.CallFunction("main", "patternSize", rePtr)
 	if err != nil {
 		panic(fmt.Errorf("patternSize Exec failed: %e", err))
 	}
@@ -221,7 +222,7 @@ func (m *pcreModule) substringNumberFromName(re Regexp, name string) int {
 	mem := m.mem()
 	copy(mem[namePtr:namePtr+uint64(nameLen)], name)
 
-	results, _, err := m.vm.ExecExportedFunction("main", "substringNumberFromName", rePtr, namePtr)
+	results, _, err := m.vm.CallFunction("main", "substringNumberFromName", rePtr, namePtr)
 	if err != nil {
 		panic(fmt.Errorf("substringNumberFromName Exec failed: %e", err))
 	}
@@ -241,26 +242,26 @@ func (m *pcreModule) match(match *Matcher, subject []byte, length int, flags int
 	mem := m.mem()
 	copy(mem[subjectPtr:subjectPtr+uint64(length)], subject)
 
-	results, _, err := m.vm.ExecExportedFunction("main", "createMatchData", rePtr)
+	results, _, err := m.vm.CallFunction("main", "createMatchData", rePtr)
 	if err != nil {
 		panic(fmt.Errorf("createMatchData Exec failed: %e", err))
 	}
 	matchData := results[0]
 	defer func(matchData uint64) {
-		_, _, err := m.vm.ExecExportedFunction("main", "destroyMatchData", matchData)
+		_, _, err := m.vm.CallFunction("main", "destroyMatchData", matchData)
 		if err != nil {
 			panic(fmt.Errorf("createMatchData Exec failed: %e", err))
 		}
 	}(matchData)
 
-	results, _, err = m.vm.ExecExportedFunction("main", "match", rePtr, subjectPtr, uint64(length), 0, uint64(flags), matchData)
+	results, _, err = m.vm.CallFunction("main", "match", rePtr, subjectPtr, uint64(length), 0, uint64(flags), matchData)
 	if err != nil {
 		panic(fmt.Errorf("compile Exec failed: %e", err))
 	}
 
 	matchCount := int(results[0])
 
-	results, _, err = m.vm.ExecExportedFunction("main", "getOVectorSize", matchData)
+	results, _, err = m.vm.CallFunction("main", "getOVectorSize", matchData)
 	if err != nil {
 		panic(fmt.Errorf("compile Exec failed: %e", err))
 	}
@@ -269,7 +270,7 @@ func (m *pcreModule) match(match *Matcher, subject []byte, length int, flags int
 		panic(fmt.Errorf("expected ovector lengths to match, but %d != %d", ovecLen*3, len(match.ovector)))
 	}
 
-	results, _, err = m.vm.ExecExportedFunction("main", "getOVectorPtr", matchData)
+	results, _, err = m.vm.CallFunction("main", "getOVectorPtr", matchData)
 	if err != nil {
 		panic(fmt.Errorf("compile Exec failed: %e", err))
 	}
@@ -290,24 +291,21 @@ func newPcreModule() *pcreModule {
 		panic(fmt.Errorf("decode module failed: %e", err))
 	}
 
-	vm, err := wasm.NewVM()
-	if err != nil {
-		panic(fmt.Errorf("NewVM() failed: %e", err))
-	}
+	vm := wasm.NewStore(naivevm.NewEngine())
 
-	err = wasi.NewEnvironment().RegisterToVirtualMachine(vm)
+	err = wasi.NewEnvironment().Register(vm)
 	if err != nil {
-		panic(fmt.Errorf("RegisterToVirtualMachine() failed: %e", err))
+		panic(fmt.Errorf("Register() failed: %e", err))
 	}
 
 	vm.AddHostFunction("env", "emscripten_notify_memory_growth", reflect.ValueOf(notifyStub))
 
-	err = vm.InstantiateModule(mod, "main")
+	err = vm.Instantiate(mod, "main")
 	if err != nil {
 		panic(fmt.Errorf("InstantiateModule() failed: %e", err))
 	}
 
-	_, _, err = vm.ExecExportedFunction("main", "_initialize")
+	_, _, err = vm.CallFunction("main", "_initialize")
 	if err != nil {
 		panic(fmt.Errorf("exec initialize() failed: %e", err))
 	}
@@ -319,7 +317,7 @@ func newPcreModule() *pcreModule {
 
 var mod *pcreModule
 
-func notifyStub(_vm *wasm.VirtualMachine, _len int32) {
+func notifyStub(_vm *wasm.Store, _len int32) {
 }
 
 func init() {

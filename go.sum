@@ -1,7 +1,7 @@
+github.com/bobby-stripe/gasm v0.0.0-20211027233930-1cc12f7c9acd h1:/8h7iWwnl7qYiEhhD9w1MZp37KNRPGTbB50HP2AyJZs=
+github.com/bobby-stripe/gasm v0.0.0-20211027233930-1cc12f7c9acd/go.mod h1:2h9RwsL1jhHbmR0BoemlltlU5MuW/vjtAvkSQYbpNMU=
 github.com/davecgh/go-spew v1.1.0 h1:ZDRjVQ15GmhC3fiQ8ni8+OwkZQO4DARzQgrnXU1Liz8=
 github.com/davecgh/go-spew v1.1.0/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
-github.com/mathetake/gasm v0.0.0-20211011033022-2e34bad267ff h1:x6GdaQ2VrvbRLKEdgKbG6H17n4O8Q6CTqy7zdHQYoYk=
-github.com/mathetake/gasm v0.0.0-20211011033022-2e34bad267ff/go.mod h1:/lxNMU3yHM3BwdlH7I1X9oigmo7RselStCdKYiJicf8=
 github.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZbAQM=
 github.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
 github.com/stretchr/objx v0.1.0/go.mod h1:HFkY916IF+rwdDfMAkV7OtwuqBVzrE8GR6GFx+wExME=
