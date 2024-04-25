@@ -89,7 +89,7 @@ func (m *pcreModule) callocLocked(len uint64) uint64 {
 	results, _, err := m.vm.CallFunction("main", "malloc", len)
 	if err != nil {
 		// this is a build-time error caught by tests
-		panic(fmt.Errorf("malloc Exec failed: %e", err))
+		panic(fmt.Errorf("malloc Exec failed: %w", err))
 	}
 	ptr := results[0]
 
@@ -105,7 +105,7 @@ func (m *pcreModule) freeLocked(ptr uint64) {
 	_, _, err := m.vm.CallFunction("main", "free", ptr)
 	if err != nil {
 		// this is a build-time error caught by tests
-		panic(fmt.Errorf("free Exec failed: %e", err))
+		panic(fmt.Errorf("free Exec failed: %w", err))
 	}
 }
 
@@ -134,7 +134,7 @@ func (m *pcreModule) getLastErrorLocked(pattern string) *CompileError {
 
 	_, _, err := m.vm.CallFunction("main", "pcre2_get_error_message_8", uint64(errorCode), errorBufPtr, 127)
 	if err != nil {
-		panic(fmt.Errorf("call(_pcre2_get_error_message_8): %e", err))
+		panic(fmt.Errorf("call(_pcre2_get_error_message_8): %w", err))
 	}
 
 	mem := m.mem()
@@ -189,7 +189,7 @@ func (m *pcreModule) Compile(pattern string, flags int) (Regexp, error) {
 
 	results, _, err := m.vm.CallFunction("main", "pcre2_compile_8", patternPtr, patternLen, uint64(flags), m.errorCodePtr, m.errorOffsetPtr, 0)
 	if err != nil {
-		panic(fmt.Errorf("call(_pcre2_compile_8): %e", err))
+		panic(fmt.Errorf("call(_pcre2_compile_8): %w", err))
 	}
 	ptr := results[0]
 	if ptr == 0 {
@@ -208,7 +208,7 @@ func (m *pcreModule) patternInfoLocked(rePtr uint64, info int) int {
 
 	_, _, err := m.vm.CallFunction("main", "pcre2_pattern_info_8", rePtr, uint64(info), resultPtr)
 	if err != nil {
-		panic(fmt.Errorf("call(pcre2_pattern_info_8): %e", err))
+		panic(fmt.Errorf("call(pcre2_pattern_info_8): %w", err))
 	}
 	return int(m.readUint32(resultPtr))
 }
@@ -239,7 +239,7 @@ func (m *pcreModule) substringNumberFromName(re Regexp, name string) int {
 
 	results, _, err := m.vm.CallFunction("main", "pcre2_substring_number_from_name_8", rePtr, namePtr)
 	if err != nil {
-		panic(fmt.Errorf("call(pcre2_substring_number_from_name_8): %e", err))
+		panic(fmt.Errorf("call(pcre2_substring_number_from_name_8): %w", err))
 	}
 	return int(results[0])
 }
@@ -259,26 +259,26 @@ func (m *pcreModule) match(match *Matcher, subject []byte, length int, flags int
 
 	results, _, err := m.vm.CallFunction("main", "pcre2_match_data_create_from_pattern_8", rePtr, 0)
 	if err != nil {
-		panic(fmt.Errorf("call(pcre2_match_data_create_from_pattern_8): %e", err))
+		panic(fmt.Errorf("call(pcre2_match_data_create_from_pattern_8): %w", err))
 	}
 	matchData := results[0]
 	defer func(matchData uint64) {
 		_, _, err := m.vm.CallFunction("main", "pcre2_match_data_free_8", matchData)
 		if err != nil {
-			panic(fmt.Errorf("call(pcre2_match_data_free_8): %e", err))
+			panic(fmt.Errorf("call(pcre2_match_data_free_8): %w", err))
 		}
 	}(matchData)
 
 	results, _, err = m.vm.CallFunction("main", "pcre2_match_8", rePtr, subjectPtr, uint64(length), 0, uint64(flags), matchData, 0)
 	if err != nil {
-		panic(fmt.Errorf("call(pcre2_match_8): %e", err))
+		panic(fmt.Errorf("call(pcre2_match_8): %w", err))
 	}
 
 	matchCount := int(results[0])
 
 	results, _, err = m.vm.CallFunction("main", "pcre2_get_ovector_count_8", matchData)
 	if err != nil {
-		panic(fmt.Errorf("call(pcre2_get_ovector_count_8): %e", err))
+		panic(fmt.Errorf("call(pcre2_get_ovector_count_8): %w", err))
 	}
 	ovecLen := int(results[0])
 	if ovecLen*3 != len(match.ovector) {
@@ -287,7 +287,7 @@ func (m *pcreModule) match(match *Matcher, subject []byte, length int, flags int
 
 	results, _, err = m.vm.CallFunction("main", "pcre2_get_ovector_pointer_8", matchData)
 	if err != nil {
-		panic(fmt.Errorf("call(pcre2_get_ovector_pointer_8): %e", err))
+		panic(fmt.Errorf("call(pcre2_get_ovector_pointer_8): %w", err))
 	}
 	ovecPtr := int(results[0])
 
@@ -303,26 +303,26 @@ func (m *pcreModule) match(match *Matcher, subject []byte, length int, flags int
 func newPcreModule() *pcreModule {
 	mod, err := wasm.DecodeModule(libpcre2WasmBytecode)
 	if err != nil {
-		panic(fmt.Errorf("decode module failed: %e", err))
+		panic(fmt.Errorf("decode module failed: %w", err))
 	}
 
 	vm := wasm.NewStore(naivevm.NewEngine())
 
 	err = wasi.NewEnvironment().Register(vm)
 	if err != nil {
-		panic(fmt.Errorf("Register() failed: %e", err))
+		panic(fmt.Errorf("Register() failed: %w", err))
 	}
 
 	_ = vm.AddHostFunction("env", "emscripten_notify_memory_growth", reflect.ValueOf(notifyStub))
 
 	err = vm.Instantiate(mod, "main")
 	if err != nil {
-		panic(fmt.Errorf("InstantiateModule() failed: %e", err))
+		panic(fmt.Errorf("InstantiateModule() failed: %w", err))
 	}
 
 	_, _, err = vm.CallFunction("main", "_initialize")
 	if err != nil {
-		panic(fmt.Errorf("exec initialize() failed: %e", err))
+		panic(fmt.Errorf("exec initialize() failed: %w", err))
 	}
 
 	m := &pcreModule{
